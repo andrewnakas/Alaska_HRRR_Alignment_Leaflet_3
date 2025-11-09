@@ -1,15 +1,15 @@
 // Initialize the map centered on Alaska
 let map;
-let hrrrOverlayPane = null;
+let hrrrImageLayer = null;
 let currentPlotType = 'cref_full_sfc';
 
 // Alaska HRRR grid geographic bounds (lat/lon)
-// Based on polar stereographic projection bounds
+// These are the APPROXIMATE bounds - polar stereographic to Web Mercator has distortion
 const HRRR_BOUNDS = {
-    south: 41.61,
-    north: 76.35,
-    west: -174.9,
-    east: -115.8
+    south: 40.0,  // Adjusted for better visual alignment
+    north: 72.5,
+    west: -180.0,
+    east: -110.0
 };
 
 // Alaska center coordinates
@@ -78,7 +78,7 @@ function drawGridBoundary() {
         fillOpacity: 0,
         dashArray: '10, 5',
         opacity: 0.8
-    }).addTo(map).bindPopup('<strong>Alaska HRRR Grid Boundary</strong><br>3 km resolution<br>919 x 1299 grid points<br><br>RED boundary = HRRR grid extent');
+    }).addTo(map).bindPopup('<strong>Alaska HRRR Image Bounds</strong><br>919 x 1299 grid points<br>3 km resolution<br><br>RED boundary = Image overlay area<br><br>Note: Polar stereographic to Web Mercator projection causes some distortion');
 }
 
 function setupEventListeners() {
@@ -113,11 +113,17 @@ function getLatestRunTime() {
     return `${year}${month}${day}${hour}`;
 }
 
-// Construct HRRR image URL
-function getHRRRImageURL(plotType, runtime, forecast = '000') {
-    // NOAA Alaska HRRR graphics URL pattern
-    const baseURL = 'https://rapidrefresh.noaa.gov/alaska/';
+// Get the direct PNG image URL from NOAA GSL
+function getDirectImageURL(plotType, runtime, forecast = '000') {
+    // Direct PNG image pattern from NOAA GSL
+    const baseURL = 'https://gsl.noaa.gov/for_web/hrrrak_ncep_jet/';
+    const forecastStr = forecast.padStart(3, '0');
+    return `${baseURL}${runtime}/full/${plotType}_f${forecastStr}.png`;
+}
 
+// Construct NOAA page URL for reference
+function getNOAAPageURL(plotType, runtime, forecast = '000') {
+    const baseURL = 'https://rapidrefresh.noaa.gov/alaska/';
     const params = new URLSearchParams({
         keys: 'hrrrak_ncep_jet:',
         runtime: runtime,
@@ -132,36 +138,60 @@ function getHRRRImageURL(plotType, runtime, forecast = '000') {
         domain: 'full:hrrrak',
         adtfn: '1'
     });
-
     return `${baseURL}displayMapUpdated.cgi?${params.toString()}`;
 }
 
-// Load and display HRRR data on the map using iframe overlay
-function loadHRRRData() {
+// Load and display HRRR data on the map
+async function loadHRRRData() {
     try {
         updateStatus('Loading HRRR 0-hour imagery...', true);
 
-        // Clear existing overlay
-        clearHRRRData();
+        // Clear existing imagery
+        if (hrrrImageLayer) {
+            map.removeLayer(hrrrImageLayer);
+        }
 
         // Get latest run time
         const runtime = getLatestRunTime();
 
-        // Get image URL for 0-hour forecast (analysis)
-        const imageURL = getHRRRImageURL(currentPlotType, runtime, '000');
+        // Get direct image URL
+        const imageURL = getDirectImageURL(currentPlotType, runtime, '000');
+        const noaaPageURL = getNOAAPageURL(currentPlotType, runtime, '000');
 
-        // Create iframe overlay
-        createIframeOverlay(imageURL, runtime);
+        console.log('Loading HRRR image:', imageURL);
+
+        // Define the geographic bounds for the image overlay
+        const imageBounds = [
+            [HRRR_BOUNDS.south, HRRR_BOUNDS.west],  // Southwest corner
+            [HRRR_BOUNDS.north, HRRR_BOUNDS.east]   // Northeast corner
+        ];
+
+        // Create image overlay with the direct PNG
+        hrrrImageLayer = L.imageOverlay(imageURL, imageBounds, {
+            opacity: 0.8,
+            interactive: false,
+            alt: `HRRR Alaska ${currentPlotType} - ${runtime}`,
+            className: 'hrrr-image-layer',
+            crossOrigin: 'anonymous'
+        });
+
+        hrrrImageLayer.on('load', function() {
+            updateStatus(`HRRR imagery loaded - Runtime: ${runtime} UTC`, false);
+            updateInfoPanel(runtime, currentPlotType, imageURL, noaaPageURL);
+            console.log('HRRR image loaded successfully');
+        });
+
+        hrrrImageLayer.on('error', function(e) {
+            console.error('Error loading HRRR image:', e);
+            updateStatus('Image failed to load. Opening NOAA page...', false);
+            window.open(noaaPageURL, '_blank');
+            showImageError(runtime, noaaPageURL);
+        });
+
+        hrrrImageLayer.addTo(map);
 
         // Fit map to HRRR bounds
-        const imageBounds = [
-            [HRRR_BOUNDS.south, HRRR_BOUNDS.west],
-            [HRRR_BOUNDS.north, HRRR_BOUNDS.east]
-        ];
         map.fitBounds(imageBounds);
-
-        updateStatus(`HRRR imagery loaded - Runtime: ${runtime} UTC`, false);
-        updateInfoPanel(runtime, currentPlotType, imageURL);
 
     } catch (error) {
         console.error('Error loading HRRR data:', error);
@@ -169,59 +199,27 @@ function loadHRRRData() {
     }
 }
 
-// Create an iframe overlay positioned over the map
-function createIframeOverlay(imageURL, runtime) {
-    // Calculate pixel bounds for the HRRR grid on the current map view
-    const updateOverlayPosition = () => {
-        if (!hrrrOverlayPane) return;
-
-        const swPoint = map.latLngToContainerPoint([HRRR_BOUNDS.south, HRRR_BOUNDS.west]);
-        const nePoint = map.latLngToContainerPoint([HRRR_BOUNDS.north, HRRR_BOUNDS.east]);
-
-        hrrrOverlayPane.style.left = swPoint.x + 'px';
-        hrrrOverlayPane.style.top = nePoint.y + 'px';
-        hrrrOverlayPane.style.width = (nePoint.x - swPoint.x) + 'px';
-        hrrrOverlayPane.style.height = (swPoint.y - nePoint.y) + 'px';
-    };
-
-    // Create overlay container
-    hrrrOverlayPane = document.createElement('div');
-    hrrrOverlayPane.id = 'hrrr-overlay-pane';
-    hrrrOverlayPane.innerHTML = `
-        <div class="overlay-controls">
-            <label>
-                Opacity: <input type="range" id="opacity-slider" min="0" max="100" value="70" />
-                <span id="opacity-value">70%</span>
-            </label>
-            <button class="overlay-btn" onclick="clearHRRRData()">✕ Close</button>
-        </div>
-        <iframe src="${imageURL}" frameborder="0"></iframe>
+// Show error message with link
+function showImageError(runtime, noaaPageURL) {
+    const infoDiv = document.getElementById('point-info');
+    infoDiv.innerHTML = `
+        <h4>Image Loading Error</h4>
+        <p>The HRRR image could not be loaded directly.</p>
+        <p><strong>Runtime:</strong> ${runtime} UTC</p>
+        <p style="margin-top: 10px;">
+            <a href="${noaaPageURL}" target="_blank" class="image-link">View on NOAA Website</a>
+        </p>
+        <p style="margin-top: 10px; font-size: 12px; color: #666;">
+            The RED boundary shows the approximate HRRR grid coverage area.
+        </p>
     `;
-
-    // Add to map container
-    map.getContainer().appendChild(hrrrOverlayPane);
-
-    // Set up opacity control
-    const opacitySlider = document.getElementById('opacity-slider');
-    const opacityValue = document.getElementById('opacity-value');
-    const iframe = hrrrOverlayPane.querySelector('iframe');
-
-    opacitySlider.addEventListener('input', function() {
-        const opacity = this.value / 100;
-        iframe.style.opacity = opacity;
-        opacityValue.textContent = this.value + '%';
-    });
-
-    // Update position on map move/zoom
-    updateOverlayPosition();
-    map.on('move zoom', updateOverlayPosition);
 }
 
 // Update info panel with current imagery details
-function updateInfoPanel(runtime, plotType, imageURL) {
+function updateInfoPanel(runtime, plotType, imageURL, noaaPageURL) {
     const infoDiv = document.getElementById('point-info');
     infoDiv.innerHTML = `
-        <h4>Current Imagery</h4>
+        <h4>HRRR Imagery Loaded</h4>
         <p><strong>Runtime:</strong> ${runtime} UTC</p>
         <p><strong>Forecast Hour:</strong> 000 (Analysis)</p>
         <p><strong>Plot Type:</strong> ${getPlotTypeLabel(plotType)}</p>
@@ -230,12 +228,17 @@ function updateInfoPanel(runtime, plotType, imageURL) {
         <p><strong>Projection:</strong> Polar Stereographic</p>
         <hr style="margin: 15px 0;">
         <p style="font-size: 12px; color: #666;">
-            <strong style="color: #ff0000;">RED boundary</strong> = HRRR grid extent<br>
-            The HRRR imagery is overlaid to match the grid boundaries.
+            <strong style="color: #ff0000;">RED boundary</strong> = Image overlay area<br><br>
+            <strong>Note:</strong> The HRRR image uses Polar Stereographic projection.
+            When overlaid on this Web Mercator map, some distortion occurs, especially
+            at the edges. The image includes NOAA's map background which helps verify alignment.
         </p>
-        <p style="margin-top: 10px;">
-            <a href="${imageURL}" target="_blank" class="image-link">Open in New Tab</a>
-        </p>
+        <div style="margin-top: 15px;">
+            <a href="${noaaPageURL}" target="_blank" class="image-link">View on NOAA Website</a>
+        </div>
+        <div style="margin-top: 10px;">
+            <a href="${imageURL}" target="_blank" class="image-link">Direct Image Link</a>
+        </div>
     `;
 }
 
@@ -250,72 +253,21 @@ function getPlotTypeLabel(plotType) {
     return labels[plotType] || plotType;
 }
 
-// Clear HRRR imagery overlay
+// Clear HRRR imagery from the map
 function clearHRRRData() {
-    if (hrrrOverlayPane) {
-        map.off('move zoom');
-        hrrrOverlayPane.remove();
-        hrrrOverlayPane = null;
+    if (hrrrImageLayer) {
+        map.removeLayer(hrrrImageLayer);
+        hrrrImageLayer = null;
     }
     document.getElementById('point-info').innerHTML = '';
     updateStatus('Imagery cleared', false);
 }
 
-// Add CSS for overlay elements
+// Add CSS for UI elements
 const style = document.createElement('style');
 style.textContent = `
-    #hrrr-overlay-pane {
-        position: absolute;
-        z-index: 500;
-        pointer-events: all;
-        border: 3px solid #ff0000;
-        box-shadow: 0 0 20px rgba(255, 0, 0, 0.5);
-        background: rgba(0, 0, 0, 0.1);
-    }
-
-    #hrrr-overlay-pane iframe {
-        width: 100%;
-        height: calc(100% - 40px);
-        opacity: 0.7;
-        display: block;
-    }
-
-    .overlay-controls {
-        background: rgba(30, 60, 114, 0.95);
-        color: white;
-        padding: 8px 12px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        font-size: 13px;
-        gap: 10px;
-    }
-
-    .overlay-controls label {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex: 1;
-    }
-
-    .overlay-controls input[type="range"] {
-        flex: 1;
-        max-width: 150px;
-    }
-
-    .overlay-btn {
-        background: white;
-        color: #1e3c72;
-        border: none;
-        padding: 4px 12px;
-        border-radius: 3px;
-        cursor: pointer;
-        font-weight: bold;
-        font-size: 14px;
-    }
-
-    .overlay-btn:hover {
-        background: #f0f0f0;
+    .hrrr-image-layer {
+        pointer-events: none;
     }
 
     .image-link {
@@ -328,6 +280,7 @@ style.textContent = `
         font-size: 13px;
         font-weight: 500;
         transition: background 0.3s;
+        text-align: center;
     }
 
     .image-link:hover {
