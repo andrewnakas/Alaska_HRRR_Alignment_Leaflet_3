@@ -1,7 +1,5 @@
-// Import GRIB2 parser
-import Grib2class from 'https://cdn.skypack.dev/grib2class@1.0.7';
-
 // Initialize the map centered on Alaska
+// Note: GRIB2CLASS is loaded from opengrib2 bundle.js
 let map;
 let hrrrCanvasLayer = null;
 let currentPlotType = 'REFC';
@@ -214,8 +212,16 @@ async function loadHRRRData() {
 
         // Parse GRIB2 data
         updateStatus('Parsing GRIB2 data...', true);
-        const grib = new Grib2class(arrayBuffer);
-        console.log('GRIB2 parsed, messages:', grib.messages.length);
+
+        // Check what GRIB parser is available
+        const GribClass = window.GRIB2CLASS || window.Grib2class || window.grib2class;
+        if (!GribClass) {
+            console.error('Available globals:', Object.keys(window).filter(k => k.toLowerCase().includes('grib')));
+            throw new Error('GRIB2 parser not loaded. Check console for available modules.');
+        }
+
+        const grib = new GribClass(arrayBuffer);
+        console.log('GRIB2 parsed, messages:', grib.messages ? grib.messages.length : 'No messages property');
 
         if (grib.messages.length === 0) {
             throw new Error('No GRIB messages found in file');
