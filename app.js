@@ -213,6 +213,11 @@ async function loadHRRRData() {
         // Parse GRIB2 data
         updateStatus('Parsing GRIB2 data...', true);
 
+        if (typeof MinimalGRIB2 === 'undefined') {
+            console.error('Available globals:', Object.keys(window).filter(k => k.toLowerCase().includes('grib')));
+            throw new Error('GRIB2 parser not loaded. Check console for available modules.');
+        }
+
         const grib = new MinimalGRIB2(arrayBuffer);
         console.log('GRIB2 parsed, messages:', grib.messages.length);
 
