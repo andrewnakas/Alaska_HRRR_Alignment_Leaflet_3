@@ -53,6 +53,22 @@ body {
     transform: translateY(0);
 }
 
+.select-control {
+    background-color: white;
+    color: #1e3c72;
+    border: 1px solid rgba(255,255,255,0.3);
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.select-control:hover {
+    background-color: #f0f0f0;
+}
+
 #status {
     color: white;
     font-size: 14px;
