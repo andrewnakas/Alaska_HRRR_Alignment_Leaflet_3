@@ -11,8 +11,12 @@ class MinimalGRIB2 {
 
     parse() {
         while (this.offset < this.data.byteLength - 4) {
-            // Look for "GRIB" magic number
-            if (this.getString(4) === 'GRIB') {
+            // Look for "GRIB" magic number (peek without advancing offset)
+            const bytes = new Uint8Array(this.data.buffer, this.offset, 4);
+            const magic = String.fromCharCode.apply(null, bytes);
+
+            if (magic === 'GRIB') {
+                this.offset += 4; // Now advance past "GRIB"
                 try {
                     const message = this.parseMessage();
                     if (message) {
@@ -21,7 +25,6 @@ class MinimalGRIB2 {
                 } catch (e) {
                     console.warn('Failed to parse GRIB message:', e);
                     // Try to find next GRIB message
-                    this.offset++;
                 }
             } else {
                 this.offset++;
@@ -32,10 +35,21 @@ class MinimalGRIB2 {
     parseMessage() {
         const startOffset = this.offset - 4;
 
-        // Section 0: Indicator Section
-        this.offset += 2; // Skip discipline and edition
+        // Section 0: Indicator Section (already read "GRIB")
+        // Bytes 5-6: Reserved
+        this.offset += 2;
+        // Byte 7: Discipline
+        const discipline = this.getUint8(this.offset);
+        this.offset += 1;
+        // Byte 8: Edition (should be 2)
+        const edition = this.getUint8(this.offset);
+        this.offset += 1;
+        // Bytes 9-16: Total length (8 bytes, but we'll read last 4 as most files are < 4GB)
+        this.offset += 4; // Skip high 32 bits
         const totalLength = this.getUint32(this.offset);
         this.offset += 4;
+
+        console.log('GRIB message found: discipline:', discipline, 'edition:', edition, 'length:', totalLength);
 
         const messageEnd = startOffset + totalLength;
 
