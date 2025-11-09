@@ -105,8 +105,9 @@ function updateStatus(message, isLoading = false) {
 // Get the latest HRRR run time
 function getLatestRunTime() {
     const now = new Date();
-    // HRRR runs are hourly, go back 3 hours to ensure data is available
-    const timeMs = now.getTime() - (3 * 60 * 60 * 1000); // Subtract 3 hours in milliseconds
+    // HRRR runs are hourly, but AWS S3 has a delay
+    // Go back 6 hours to ensure data is available
+    const timeMs = now.getTime() - (6 * 60 * 60 * 1000); // Subtract 6 hours in milliseconds
     const targetDate = new Date(timeMs);
 
     const year = targetDate.getUTCFullYear();
@@ -161,27 +162,55 @@ async function loadHRRRData() {
             map.removeLayer(hrrrCanvasLayer);
         }
 
-        // Get latest run time
-        const runtime = getLatestRunTime();
-        console.log('Fetching HRRR data for:', runtime.displayString);
+        // Try multiple times with different offsets if data isn't available
+        let arrayBuffer = null;
+        let runtime = null;
+        let gribURL = null;
 
-        // Construct GRIB URL
-        const gribURL = getHRRRGribURL(currentPlotType, runtime);
-        console.log('GRIB URL:', gribURL);
+        for (let hoursBack = 6; hoursBack <= 24; hoursBack += 1) {
+            const now = new Date();
+            const timeMs = now.getTime() - (hoursBack * 60 * 60 * 1000);
+            const targetDate = new Date(timeMs);
 
-        // Fetch GRIB2 data
-        updateStatus('Downloading GRIB2 file...', true);
-        const response = await fetch(gribURL, {
-            mode: 'cors',
-            credentials: 'omit'
-        });
+            const year = targetDate.getUTCFullYear();
+            const month = String(targetDate.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(targetDate.getUTCDate()).padStart(2, '0');
+            const hour = String(targetDate.getUTCHours()).padStart(2, '0');
 
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            runtime = {
+                dateString: `${year}${month}${day}`,
+                hourString: hour,
+                displayString: `${year}-${month}-${day} ${hour}:00 UTC`
+            };
+
+            gribURL = getHRRRGribURL(currentPlotType, runtime);
+            console.log(`Trying ${runtime.displayString}:`, gribURL);
+
+            try {
+                updateStatus(`Trying ${runtime.displayString}...`, true);
+                const response = await fetch(gribURL, {
+                    mode: 'cors',
+                    credentials: 'omit'
+                });
+
+                if (response.ok) {
+                    arrayBuffer = await response.arrayBuffer();
+                    console.log('Downloaded GRIB2 file:', arrayBuffer.byteLength, 'bytes');
+                    break; // Success! Exit the loop
+                } else {
+                    console.log(`HTTP ${response.status} for ${runtime.displayString}`);
+                }
+            } catch (err) {
+                console.log(`Failed to fetch ${runtime.displayString}:`, err.message);
+            }
         }
 
-        const arrayBuffer = await response.arrayBuffer();
-        console.log('Downloaded GRIB2 file:', arrayBuffer.byteLength, 'bytes');
+        if (!arrayBuffer) {
+            throw new Error('No HRRR data available in the last 24 hours. The AWS S3 bucket may be experiencing issues.');
+        }
+
+        updateStatus('Downloading GRIB2 file...', true);
+        console.log('Using data from:', runtime.displayString);
 
         // Parse GRIB2 data
         updateStatus('Parsing GRIB2 data...', true);
