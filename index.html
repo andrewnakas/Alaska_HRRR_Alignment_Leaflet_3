@@ -17,13 +17,10 @@
     <div id="header">
         <h1>Alaska HRRR Alignment Leaflet Map</h1>
         <div id="controls">
-            <button id="loadDataBtn" class="btn">Load HRRR 0-Hour Imagery</button>
+            <button id="loadDataBtn" class="btn">Load HRRR 0-Hour Data</button>
             <button id="clearDataBtn" class="btn">Clear Data</button>
             <select id="plotTypeSelect" class="select-control">
-                <option value="cref_full_sfc">Composite Reflectivity</option>
-                <option value="1ref_full_1000m">1 km AGL Reflectivity</option>
-                <option value="mref_full_sfc">Max 1km Reflectivity</option>
-                <option value="allfields">All Fields</option>
+                <option value="REFC">Composite Reflectivity (REFC)</option>
             </select>
             <span id="status"></span>
         </div>
@@ -33,12 +30,14 @@
 
     <div id="info-panel">
         <h3>About</h3>
-        <p>This map displays High-Resolution Rapid Refresh (HRRR) model reference points for Alaska.</p>
+        <p>This map displays High-Resolution Rapid Refresh (HRRR) model data for Alaska loaded directly from NOAA NOMADS GRIB2 files.</p>
         <p><strong>HRRR-Alaska Specifications:</strong></p>
         <ul>
             <li>Resolution: 3 km</li>
             <li>Coverage: Alaska region</li>
             <li>Update Frequency: Hourly</li>
+            <li>Source: NOAA NOMADS GRIB Filter</li>
+            <li>Format: GRIB2 (parsed in-browser)</li>
         </ul>
         <div id="point-info"></div>
     </div>
@@ -53,6 +52,9 @@
 
     <!-- Proj4Leaflet for projection support in Leaflet -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4leaflet/1.0.2/proj4leaflet.min.js"></script>
+
+    <!-- GRIB2 parsing libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/grib2class@1.0.7/grib2class.min.js"></script>
 
     <!-- Custom JS -->
     <script src="app.js"></script>
