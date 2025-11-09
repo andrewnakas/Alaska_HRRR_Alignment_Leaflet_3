@@ -1,8 +1,7 @@
 // Initialize the map centered on Alaska
 let map;
-let hrrrImageLayer = null;
+let hrrrOverlayPane = null;
 let currentPlotType = 'cref_full_sfc';
-let imageWindow = null;
 
 // Alaska HRRR grid geographic bounds (lat/lon)
 // Based on polar stereographic projection bounds
@@ -74,11 +73,12 @@ function drawGridBoundary() {
     ];
 
     L.rectangle(bounds, {
-        color: '#1e3c72',
-        weight: 2,
+        color: '#ff0000',
+        weight: 3,
         fillOpacity: 0,
-        dashArray: '5, 10'
-    }).addTo(map).bindPopup('<strong>Alaska HRRR Grid Boundary</strong><br>3 km resolution<br>919 x 1299 grid points');
+        dashArray: '10, 5',
+        opacity: 0.8
+    }).addTo(map).bindPopup('<strong>Alaska HRRR Grid Boundary</strong><br>3 km resolution<br>919 x 1299 grid points<br><br>RED boundary = HRRR grid extent');
 }
 
 function setupEventListeners() {
@@ -136,52 +136,13 @@ function getHRRRImageURL(plotType, runtime, forecast = '000') {
     return `${baseURL}displayMapUpdated.cgi?${params.toString()}`;
 }
 
-// Try multiple CORS proxies
-async function tryLoadImageWithProxies(imageURL) {
-    const proxies = [
-        // Try direct first
-        null,
-        // Fallback proxies
-        (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-        (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-        (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
-    ];
-
-    for (let i = 0; i < proxies.length; i++) {
-        const proxyFn = proxies[i];
-        const urlToTry = proxyFn ? proxyFn(imageURL) : imageURL;
-
-        try {
-            // Test if image loads
-            const testImg = new Image();
-            const loadPromise = new Promise((resolve, reject) => {
-                testImg.onload = () => resolve(urlToTry);
-                testImg.onerror = () => reject();
-                setTimeout(() => reject(), 5000); // 5 second timeout
-            });
-            testImg.src = urlToTry;
-
-            const successUrl = await loadPromise;
-            console.log(`Image loaded successfully with ${proxyFn ? 'proxy' : 'direct'} method`);
-            return successUrl;
-        } catch (e) {
-            console.log(`Failed with ${proxyFn ? 'proxy' : 'direct'} method, trying next...`);
-            continue;
-        }
-    }
-
-    return null;
-}
-
-// Load and display HRRR data on the map
-async function loadHRRRData() {
+// Load and display HRRR data on the map using iframe overlay
+function loadHRRRData() {
     try {
         updateStatus('Loading HRRR 0-hour imagery...', true);
 
-        // Clear existing imagery
-        if (hrrrImageLayer) {
-            map.removeLayer(hrrrImageLayer);
-        }
+        // Clear existing overlay
+        clearHRRRData();
 
         // Get latest run time
         const runtime = getLatestRunTime();
@@ -189,92 +150,75 @@ async function loadHRRRData() {
         // Get image URL for 0-hour forecast (analysis)
         const imageURL = getHRRRImageURL(currentPlotType, runtime, '000');
 
-        // Define the geographic bounds for the image overlay
+        // Create iframe overlay
+        createIframeOverlay(imageURL, runtime);
+
+        // Fit map to HRRR bounds
         const imageBounds = [
-            [HRRR_BOUNDS.south, HRRR_BOUNDS.west],  // Southwest corner
-            [HRRR_BOUNDS.north, HRRR_BOUNDS.east]   // Northeast corner
+            [HRRR_BOUNDS.south, HRRR_BOUNDS.west],
+            [HRRR_BOUNDS.north, HRRR_BOUNDS.east]
         ];
+        map.fitBounds(imageBounds);
 
-        // Try to load image with various methods
-        updateStatus('Attempting to load imagery...', true);
-        const workingURL = await tryLoadImageWithProxies(imageURL);
-
-        if (workingURL) {
-            // Successfully found a working URL
-            hrrrImageLayer = L.imageOverlay(workingURL, imageBounds, {
-                opacity: 0.7,
-                interactive: true,
-                alt: `HRRR Alaska ${currentPlotType} - ${runtime}`,
-                className: 'hrrr-image-layer'
-            });
-
-            hrrrImageLayer.on('load', function() {
-                updateStatus(`HRRR imagery loaded - Runtime: ${runtime} UTC`, false);
-                updateInfoPanel(runtime, currentPlotType);
-            });
-
-            hrrrImageLayer.on('error', function(e) {
-                console.error('Error displaying HRRR image:', e);
-                updateStatus('Image display failed. Opening in new window...', false);
-                showImageInNewWindow(imageURL, runtime);
-            });
-
-            hrrrImageLayer.addTo(map);
-            map.fitBounds(imageBounds);
-        } else {
-            // All methods failed, show alternative view
-            updateStatus('Direct image loading not available. Opening in new window...', false);
-            showImageInNewWindow(imageURL, runtime);
-            updateInfoPanel(runtime, currentPlotType);
-        }
+        updateStatus(`HRRR imagery loaded - Runtime: ${runtime} UTC`, false);
+        updateInfoPanel(runtime, currentPlotType, imageURL);
 
     } catch (error) {
         console.error('Error loading HRRR data:', error);
-        updateStatus('Error loading imagery. See alternative view.', false);
-        const runtime = getLatestRunTime();
-        const imageURL = getHRRRImageURL(currentPlotType, runtime, '000');
-        showImageInNewWindow(imageURL, runtime);
+        updateStatus('Error loading imagery. See console for details.', false);
     }
 }
 
-// Show HRRR image in a new window
-function showImageInNewWindow(url, runtime) {
-    const infoDiv = document.getElementById('point-info');
+// Create an iframe overlay positioned over the map
+function createIframeOverlay(imageURL, runtime) {
+    // Calculate pixel bounds for the HRRR grid on the current map view
+    const updateOverlayPosition = () => {
+        if (!hrrrOverlayPane) return;
 
-    // Close previous window if open
-    if (imageWindow && !imageWindow.closed) {
-        imageWindow.close();
-    }
+        const swPoint = map.latLngToContainerPoint([HRRR_BOUNDS.south, HRRR_BOUNDS.west]);
+        const nePoint = map.latLngToContainerPoint([HRRR_BOUNDS.north, HRRR_BOUNDS.east]);
 
-    // Open new window
-    imageWindow = window.open(url, 'HRRR_Image', 'width=1200,height=900,scrollbars=yes,resizable=yes');
+        hrrrOverlayPane.style.left = swPoint.x + 'px';
+        hrrrOverlayPane.style.top = nePoint.y + 'px';
+        hrrrOverlayPane.style.width = (nePoint.x - swPoint.x) + 'px';
+        hrrrOverlayPane.style.height = (swPoint.y - nePoint.y) + 'px';
+    };
 
-    infoDiv.innerHTML = `
-        <h4>HRRR Imagery</h4>
-        <p>Due to CORS restrictions, the HRRR imagery has been opened in a new window.</p>
-        <p><strong>Runtime:</strong> ${runtime} UTC</p>
-        <p><strong>Forecast Hour:</strong> 000 (Analysis)</p>
-        <p><strong>Plot Type:</strong> ${getPlotTypeLabel(currentPlotType)}</p>
-        <p><strong>Grid:</strong> 919 x 1299 points</p>
-        <p><strong>Resolution:</strong> 3 km</p>
-        <p><strong>Projection:</strong> Polar Stereographic</p>
-        <hr style="margin: 15px 0;">
-        <p style="font-size: 12px; color: #666;">
-            The blue dashed rectangle on the map shows the exact Alaska HRRR grid bounds.
-        </p>
-        <p><button onclick="window.open('${url}', 'HRRR_Image', 'width=1200,height=900,scrollbars=yes,resizable=yes')" class="btn" style="margin-top: 10px; width: 100%;">Reopen Image Window</button></p>
+    // Create overlay container
+    hrrrOverlayPane = document.createElement('div');
+    hrrrOverlayPane.id = 'hrrr-overlay-pane';
+    hrrrOverlayPane.innerHTML = `
+        <div class="overlay-controls">
+            <label>
+                Opacity: <input type="range" id="opacity-slider" min="0" max="100" value="70" />
+                <span id="opacity-value">70%</span>
+            </label>
+            <button class="overlay-btn" onclick="clearHRRRData()">✕ Close</button>
+        </div>
+        <iframe src="${imageURL}" frameborder="0"></iframe>
     `;
 
-    // Fit map to HRRR bounds
-    const imageBounds = [
-        [HRRR_BOUNDS.south, HRRR_BOUNDS.west],
-        [HRRR_BOUNDS.north, HRRR_BOUNDS.east]
-    ];
-    map.fitBounds(imageBounds);
+    // Add to map container
+    map.getContainer().appendChild(hrrrOverlayPane);
+
+    // Set up opacity control
+    const opacitySlider = document.getElementById('opacity-slider');
+    const opacityValue = document.getElementById('opacity-value');
+    const iframe = hrrrOverlayPane.querySelector('iframe');
+
+    opacitySlider.addEventListener('input', function() {
+        const opacity = this.value / 100;
+        iframe.style.opacity = opacity;
+        opacityValue.textContent = this.value + '%';
+    });
+
+    // Update position on map move/zoom
+    updateOverlayPosition();
+    map.on('move zoom', updateOverlayPosition);
 }
 
 // Update info panel with current imagery details
-function updateInfoPanel(runtime, plotType) {
+function updateInfoPanel(runtime, plotType, imageURL) {
     const infoDiv = document.getElementById('point-info');
     infoDiv.innerHTML = `
         <h4>Current Imagery</h4>
@@ -286,7 +230,11 @@ function updateInfoPanel(runtime, plotType) {
         <p><strong>Projection:</strong> Polar Stereographic</p>
         <hr style="margin: 15px 0;">
         <p style="font-size: 12px; color: #666;">
-            The blue dashed rectangle shows the exact Alaska HRRR grid bounds aligned with the map.
+            <strong style="color: #ff0000;">RED boundary</strong> = HRRR grid extent<br>
+            The HRRR imagery is overlaid to match the grid boundaries.
+        </p>
+        <p style="margin-top: 10px;">
+            <a href="${imageURL}" target="_blank" class="image-link">Open in New Tab</a>
         </p>
     `;
 }
@@ -302,29 +250,90 @@ function getPlotTypeLabel(plotType) {
     return labels[plotType] || plotType;
 }
 
-// Clear HRRR imagery from the map
+// Clear HRRR imagery overlay
 function clearHRRRData() {
-    if (hrrrImageLayer) {
-        map.removeLayer(hrrrImageLayer);
-        hrrrImageLayer = null;
-    }
-    if (imageWindow && !imageWindow.closed) {
-        imageWindow.close();
-        imageWindow = null;
+    if (hrrrOverlayPane) {
+        map.off('move zoom');
+        hrrrOverlayPane.remove();
+        hrrrOverlayPane = null;
     }
     document.getElementById('point-info').innerHTML = '';
     updateStatus('Imagery cleared', false);
 }
 
-// Add CSS for UI elements
+// Add CSS for overlay elements
 const style = document.createElement('style');
 style.textContent = `
-    .hrrr-image-layer {
-        pointer-events: auto;
+    #hrrr-overlay-pane {
+        position: absolute;
+        z-index: 500;
+        pointer-events: all;
+        border: 3px solid #ff0000;
+        box-shadow: 0 0 20px rgba(255, 0, 0, 0.5);
+        background: rgba(0, 0, 0, 0.1);
     }
-    .btn {
+
+    #hrrr-overlay-pane iframe {
+        width: 100%;
+        height: calc(100% - 40px);
+        opacity: 0.7;
+        display: block;
+    }
+
+    .overlay-controls {
+        background: rgba(30, 60, 114, 0.95);
+        color: white;
+        padding: 8px 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 13px;
+        gap: 10px;
+    }
+
+    .overlay-controls label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+    }
+
+    .overlay-controls input[type="range"] {
+        flex: 1;
+        max-width: 150px;
+    }
+
+    .overlay-btn {
+        background: white;
+        color: #1e3c72;
+        border: none;
+        padding: 4px 12px;
+        border-radius: 3px;
         cursor: pointer;
+        font-weight: bold;
+        font-size: 14px;
     }
+
+    .overlay-btn:hover {
+        background: #f0f0f0;
+    }
+
+    .image-link {
+        display: inline-block;
+        background: #1e3c72;
+        color: white;
+        padding: 8px 16px;
+        text-decoration: none;
+        border-radius: 4px;
+        font-size: 13px;
+        font-weight: 500;
+        transition: background 0.3s;
+    }
+
+    .image-link:hover {
+        background: #2a5298;
+    }
+
     hr {
         border: none;
         border-top: 1px solid #eee;
