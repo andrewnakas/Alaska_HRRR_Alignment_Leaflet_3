@@ -103,12 +103,13 @@ function updateStatus(message, isLoading = false) {
 function getLatestRunTime() {
     const now = new Date();
     // HRRR runs are hourly, go back 3 hours to ensure data is available
-    now.setHours(now.getUTCHours() - 3);
+    const timeMs = now.getTime() - (3 * 60 * 60 * 1000); // Subtract 3 hours in milliseconds
+    const targetDate = new Date(timeMs);
 
-    const year = now.getUTCFullYear();
-    const month = String(now.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(now.getUTCDate()).padStart(2, '0');
-    const hour = String(now.getUTCHours()).padStart(2, '0');
+    const year = targetDate.getUTCFullYear();
+    const month = String(targetDate.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(targetDate.getUTCDate()).padStart(2, '0');
+    const hour = String(targetDate.getUTCHours()).padStart(2, '0');
 
     return {
         dateString: `${year}${month}${day}`,
@@ -117,25 +118,17 @@ function getLatestRunTime() {
     };
 }
 
-// Construct NOMADS GRIB filter URL for HRRR Alaska
-function getNOMADSGribURL(variable, runtime, forecast = '00') {
+// Construct AWS S3 URL for HRRR Alaska GRIB2 file
+function getHRRRGribURL(variable, runtime, forecast = '00') {
     const { dateString, hourString } = runtime;
 
-    // NOMADS GRIB filter parameters
-    const file = `hrrr.t${hourString}z.wrfsfcf${forecast}.ak.grib2`;
-    const dir = encodeURIComponent(`/hrrr.${dateString}/alaska`);
+    // AWS S3 bucket structure for HRRR Alaska
+    // https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.YYYYMMDD/alaska/hrrr.tHHz.wrfsfcfFF.ak.grib2
+    const baseURL = 'https://noaa-hrrr-bdp-pds.s3.amazonaws.com';
+    const file = `hrrr.t${hourString}z.wrfsfc${forecast}.ak.grib2`;
+    const path = `hrrr.${dateString}/alaska/${file}`;
 
-    // Construct URL with variable filter
-    // For composite reflectivity (REFC), we need the entire atmosphere level
-    const baseURL = 'https://nomads.ncep.noaa.gov/cgi-bin/filter_hrrrak_2d.pl';
-    const params = new URLSearchParams({
-        file: file,
-        [`var_${variable}`]: 'on',
-        'lev_entire_atmosphere': 'on',
-        dir: dir
-    });
-
-    return `${baseURL}?${params.toString()}`;
+    return `${baseURL}/${path}`;
 }
 
 // Color scale for composite reflectivity (dBZ)
@@ -157,7 +150,7 @@ function getReflectivityColor(dbz) {
 // Load and display HRRR data on the map
 async function loadHRRRData() {
     try {
-        updateStatus('Fetching HRRR GRIB2 data from NOMADS...', true);
+        updateStatus('Fetching HRRR GRIB2 data from AWS...', true);
 
         // Clear existing layer
         if (hrrrCanvasLayer) {
@@ -169,7 +162,7 @@ async function loadHRRRData() {
         console.log('Fetching HRRR data for:', runtime.displayString);
 
         // Construct GRIB URL
-        const gribURL = getNOMADSGribURL(currentPlotType, runtime);
+        const gribURL = getHRRRGribURL(currentPlotType, runtime);
         console.log('GRIB URL:', gribURL);
 
         // Fetch GRIB2 data
@@ -303,7 +296,7 @@ function updateInfoPanel(runtime, variable, nx, ny) {
         <p><strong>Variable:</strong> ${getVariableLabel(variable)}</p>
         <p><strong>Grid:</strong> ${nx} x ${ny} points</p>
         <p><strong>Resolution:</strong> 3 km</p>
-        <p><strong>Source:</strong> NOAA NOMADS</p>
+        <p><strong>Source:</strong> NOAA AWS S3 (noaa-hrrr-bdp-pds)</p>
         <hr style="margin: 15px 0;">
         <p style="font-size: 12px; color: #666;">
             <strong style="color: #ff0000;">RED boundary</strong> = Approximate coverage area<br><br>
@@ -345,15 +338,14 @@ function showErrorInfo(error) {
         <h4>Troubleshooting</h4>
         <p style="font-size: 12px;">
             Common issues:<br>
-            • CORS restrictions from NOMADS<br>
             • Data not yet available for selected time<br>
             • Network connectivity issues<br>
-            • Invalid GRIB2 format
+            • Invalid GRIB2 format<br>
+            • File not found on AWS S3
         </p>
         <p style="font-size: 12px; margin-top: 10px;">
-            Try selecting an earlier time or check the
-            <a href="https://nomads.ncep.noaa.gov/gribfilter.php?ds=hrrrak_2d" target="_blank">NOMADS interface</a>
-            to verify data availability.
+            HRRR data is fetched from NOAA's AWS S3 bucket. Data is typically available
+            within 1-2 hours of the model run time.
         </p>
     `;
 }
