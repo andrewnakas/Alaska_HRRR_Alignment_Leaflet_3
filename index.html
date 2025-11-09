@@ -46,13 +46,13 @@
     <!-- Proj4 JS for coordinate projection -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
 
-    <!-- Proj4Leaflet for projection support in Leaflet -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4leaflet/1.0.2/proj4leaflet.min.js"></script>
-
-    <!-- Leaflet JS -->
+    <!-- Leaflet JS (must load before Proj4Leaflet) -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
             crossorigin=""></script>
+
+    <!-- Proj4Leaflet for projection support in Leaflet -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4leaflet/1.0.2/proj4leaflet.min.js"></script>
 
     <!-- Custom JS -->
     <script src="app.js"></script>

@@ -2,6 +2,7 @@
 let map;
 let hrrrImageLayer = null;
 let currentPlotType = 'cref_full_sfc';
+let imageWindow = null;
 
 // Alaska HRRR grid geographic bounds (lat/lon)
 // Based on polar stereographic projection bounds
@@ -135,10 +136,41 @@ function getHRRRImageURL(plotType, runtime, forecast = '000') {
     return `${baseURL}displayMapUpdated.cgi?${params.toString()}`;
 }
 
-// Create a CORS proxy URL
-function getCORSProxyURL(url) {
-    // Using allOrigins as CORS proxy
-    return `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+// Try multiple CORS proxies
+async function tryLoadImageWithProxies(imageURL) {
+    const proxies = [
+        // Try direct first
+        null,
+        // Fallback proxies
+        (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+        (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+        (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
+    ];
+
+    for (let i = 0; i < proxies.length; i++) {
+        const proxyFn = proxies[i];
+        const urlToTry = proxyFn ? proxyFn(imageURL) : imageURL;
+
+        try {
+            // Test if image loads
+            const testImg = new Image();
+            const loadPromise = new Promise((resolve, reject) => {
+                testImg.onload = () => resolve(urlToTry);
+                testImg.onerror = () => reject();
+                setTimeout(() => reject(), 5000); // 5 second timeout
+            });
+            testImg.src = urlToTry;
+
+            const successUrl = await loadPromise;
+            console.log(`Image loaded successfully with ${proxyFn ? 'proxy' : 'direct'} method`);
+            return successUrl;
+        } catch (e) {
+            console.log(`Failed with ${proxyFn ? 'proxy' : 'direct'} method, trying next...`);
+            continue;
+        }
+    }
+
+    return null;
 }
 
 // Load and display HRRR data on the map
@@ -157,68 +189,88 @@ async function loadHRRRData() {
         // Get image URL for 0-hour forecast (analysis)
         const imageURL = getHRRRImageURL(currentPlotType, runtime, '000');
 
-        // For direct image display, we'll use a proxy to handle CORS
-        // Note: This may not work for all plot types due to how NOAA serves the images
-        // The images are actually generated dynamically by a CGI script
-
-        // Since the NOAA images are served via CGI and may have CORS issues,
-        // we'll create an iframe approach or use a different method
-
-        // For now, let's create a workaround by displaying the image with proper bounds
-        const proxyURL = getCORSProxyURL(imageURL);
-
         // Define the geographic bounds for the image overlay
         const imageBounds = [
             [HRRR_BOUNDS.south, HRRR_BOUNDS.west],  // Southwest corner
             [HRRR_BOUNDS.north, HRRR_BOUNDS.east]   // Northeast corner
         ];
 
-        // Create image overlay
-        hrrrImageLayer = L.imageOverlay(proxyURL, imageBounds, {
-            opacity: 0.7,
-            interactive: true,
-            errorOverlayUrl: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"%3E%3C/svg%3E',
-            alt: `HRRR Alaska ${currentPlotType} - ${runtime}`,
-            className: 'hrrr-image-layer'
-        });
+        // Try to load image with various methods
+        updateStatus('Attempting to load imagery...', true);
+        const workingURL = await tryLoadImageWithProxies(imageURL);
 
-        hrrrImageLayer.on('load', function() {
-            updateStatus(`HRRR imagery loaded - Runtime: ${runtime} UTC`, false);
+        if (workingURL) {
+            // Successfully found a working URL
+            hrrrImageLayer = L.imageOverlay(workingURL, imageBounds, {
+                opacity: 0.7,
+                interactive: true,
+                alt: `HRRR Alaska ${currentPlotType} - ${runtime}`,
+                className: 'hrrr-image-layer'
+            });
+
+            hrrrImageLayer.on('load', function() {
+                updateStatus(`HRRR imagery loaded - Runtime: ${runtime} UTC`, false);
+                updateInfoPanel(runtime, currentPlotType);
+            });
+
+            hrrrImageLayer.on('error', function(e) {
+                console.error('Error displaying HRRR image:', e);
+                updateStatus('Image display failed. Opening in new window...', false);
+                showImageInNewWindow(imageURL, runtime);
+            });
+
+            hrrrImageLayer.addTo(map);
+            map.fitBounds(imageBounds);
+        } else {
+            // All methods failed, show alternative view
+            updateStatus('Direct image loading not available. Opening in new window...', false);
+            showImageInNewWindow(imageURL, runtime);
             updateInfoPanel(runtime, currentPlotType);
-        });
-
-        hrrrImageLayer.on('error', function(e) {
-            console.error('Error loading HRRR image:', e);
-            // Try alternative approach: open in new layer or provide link
-            updateStatus('Image load failed. Showing link instead.', false);
-            showImageLink(imageURL, runtime);
-        });
-
-        hrrrImageLayer.addTo(map);
-
-        // Fit map to HRRR bounds
-        map.fitBounds(imageBounds);
+        }
 
     } catch (error) {
         console.error('Error loading HRRR data:', error);
-        updateStatus('Error loading imagery. See console for details.', false);
+        updateStatus('Error loading imagery. See alternative view.', false);
+        const runtime = getLatestRunTime();
+        const imageURL = getHRRRImageURL(currentPlotType, runtime, '000');
+        showImageInNewWindow(imageURL, runtime);
     }
 }
 
-// Show a link to the image if direct loading fails
-function showImageLink(url, runtime) {
+// Show HRRR image in a new window
+function showImageInNewWindow(url, runtime) {
     const infoDiv = document.getElementById('point-info');
+
+    // Close previous window if open
+    if (imageWindow && !imageWindow.closed) {
+        imageWindow.close();
+    }
+
+    // Open new window
+    imageWindow = window.open(url, 'HRRR_Image', 'width=1200,height=900,scrollbars=yes,resizable=yes');
+
     infoDiv.innerHTML = `
-        <h4>HRRR Image Link</h4>
-        <p>Direct image loading encountered CORS restrictions.</p>
+        <h4>HRRR Imagery</h4>
+        <p>Due to CORS restrictions, the HRRR imagery has been opened in a new window.</p>
         <p><strong>Runtime:</strong> ${runtime} UTC</p>
+        <p><strong>Forecast Hour:</strong> 000 (Analysis)</p>
         <p><strong>Plot Type:</strong> ${getPlotTypeLabel(currentPlotType)}</p>
-        <p><a href="${url}" target="_blank" class="image-link">Open HRRR Image in New Tab</a></p>
-        <p style="margin-top: 10px; font-size: 12px; color: #666;">
-            Note: The image is served by NOAA's CGI script and may have CORS restrictions.
-            You can view it directly by clicking the link above.
+        <p><strong>Grid:</strong> 919 x 1299 points</p>
+        <p><strong>Resolution:</strong> 3 km</p>
+        <p><strong>Projection:</strong> Polar Stereographic</p>
+        <hr style="margin: 15px 0;">
+        <p style="font-size: 12px; color: #666;">
+            The blue dashed rectangle on the map shows the exact Alaska HRRR grid bounds.
         </p>
+        <p><button onclick="window.open('${url}', 'HRRR_Image', 'width=1200,height=900,scrollbars=yes,resizable=yes')" class="btn" style="margin-top: 10px; width: 100%;">Reopen Image Window</button></p>
     `;
+
+    // Fit map to HRRR bounds
+    const imageBounds = [
+        [HRRR_BOUNDS.south, HRRR_BOUNDS.west],
+        [HRRR_BOUNDS.north, HRRR_BOUNDS.east]
+    ];
+    map.fitBounds(imageBounds);
 }
 
 // Update info panel with current imagery details
@@ -232,6 +284,10 @@ function updateInfoPanel(runtime, plotType) {
         <p><strong>Grid:</strong> 919 x 1299 points</p>
         <p><strong>Resolution:</strong> 3 km</p>
         <p><strong>Projection:</strong> Polar Stereographic</p>
+        <hr style="margin: 15px 0;">
+        <p style="font-size: 12px; color: #666;">
+            The blue dashed rectangle shows the exact Alaska HRRR grid bounds aligned with the map.
+        </p>
     `;
 }
 
@@ -252,29 +308,26 @@ function clearHRRRData() {
         map.removeLayer(hrrrImageLayer);
         hrrrImageLayer = null;
     }
+    if (imageWindow && !imageWindow.closed) {
+        imageWindow.close();
+        imageWindow = null;
+    }
     document.getElementById('point-info').innerHTML = '';
     updateStatus('Imagery cleared', false);
 }
 
-// Add CSS for image links
+// Add CSS for UI elements
 const style = document.createElement('style');
 style.textContent = `
     .hrrr-image-layer {
         pointer-events: auto;
     }
-    .image-link {
-        color: #1e3c72;
-        text-decoration: none;
-        font-weight: bold;
-        padding: 8px 12px;
-        background-color: #f0f0f0;
-        border-radius: 4px;
-        display: inline-block;
-        margin-top: 10px;
-        transition: background-color 0.3s;
+    .btn {
+        cursor: pointer;
     }
-    .image-link:hover {
-        background-color: #e0e0e0;
+    hr {
+        border: none;
+        border-top: 1px solid #eee;
     }
 `;
 document.head.appendChild(style);
