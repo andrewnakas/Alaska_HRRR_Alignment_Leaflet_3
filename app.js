@@ -1,3 +1,6 @@
+// Import GRIB2 parser
+import Grib2class from 'https://cdn.skypack.dev/grib2class@1.0.7';
+
 // Initialize the map centered on Alaska
 let map;
 let hrrrCanvasLayer = null;
@@ -125,7 +128,8 @@ function getHRRRGribURL(variable, runtime, forecast = '00') {
     // AWS S3 bucket structure for HRRR Alaska
     // https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.YYYYMMDD/alaska/hrrr.tHHz.wrfsfcfFF.ak.grib2
     const baseURL = 'https://noaa-hrrr-bdp-pds.s3.amazonaws.com';
-    const file = `hrrr.t${hourString}z.wrfsfc${forecast}.ak.grib2`;
+    const forecastPadded = forecast.padStart(2, '0');
+    const file = `hrrr.t${hourString}z.wrfsfcf${forecastPadded}.ak.grib2`;
     const path = `hrrr.${dateString}/alaska/${file}`;
 
     return `${baseURL}/${path}`;
