@@ -213,57 +213,53 @@ async function loadHRRRData() {
         // Parse GRIB2 data
         updateStatus('Parsing GRIB2 data...', true);
 
-        // Check what GRIB parser is available
-        const GribClass = window.GRIB2CLASS || window.Grib2class || window.grib2class;
-        if (!GribClass) {
-            console.error('Available globals:', Object.keys(window).filter(k => k.toLowerCase().includes('grib')));
-            throw new Error('GRIB2 parser not loaded. Check console for available modules.');
-        }
-
-        const grib = new GribClass(arrayBuffer);
-        console.log('GRIB2 parsed, messages:', grib.messages ? grib.messages.length : 'No messages property');
+        const grib = new MinimalGRIB2(arrayBuffer);
+        console.log('GRIB2 parsed, messages:', grib.messages.length);
 
         if (grib.messages.length === 0) {
             throw new Error('No GRIB messages found in file');
         }
 
-        // Get the first message (should be our REFC data)
-        const message = grib.messages[0];
-        console.log('Message info:', {
-            parameter: message.parameter,
-            level: message.level,
-            nx: message.nx,
-            ny: message.ny,
-            la1: message.la1,
-            lo1: message.lo1,
-            la2: message.la2,
-            lo2: message.lo2
-        });
+        // Find composite reflectivity message
+        // REFC is typically parameter category 16 (meteorological), parameter 196 (composite reflectivity)
+        let refcMessage = null;
+        for (const msg of grib.messages) {
+            console.log('Message:', msg.product.category, msg.product.parameter, msg.grid.nx, 'x', msg.grid.ny);
+            if (msg.product.category === 16 && msg.product.parameter === 196) {
+                refcMessage = msg;
+                break;
+            }
+        }
 
-        // Get grid data
-        const gridData = message.getData();
-        console.log('Grid data points:', gridData.length);
+        if (!refcMessage) {
+            // If we didn't find REFC specifically, just use first message with grid data
+            refcMessage = grib.messages.find(m => m.grid.nx && m.grid.ny) || grib.messages[0];
+            console.warn('REFC not found, using first available message');
+        }
 
-        // Get grid dimensions and bounds from GRIB metadata
-        const nx = message.nx; // Number of points along x-axis
-        const ny = message.ny; // Number of points along y-axis
+        console.log('Using message:', refcMessage);
 
-        // Get geographic bounds from GRIB
-        // la1, lo1 = first grid point (usually upper-left)
-        // la2, lo2 = last grid point (usually lower-right)
-        const lat1 = message.la1 / 1e6; // Convert from microdegrees
-        const lon1 = message.lo1 / 1e6;
-        const lat2 = message.la2 / 1e6;
-        const lon2 = message.lo2 / 1e6;
+        // Get grid dimensions and bounds
+        const nx = refcMessage.grid.nx;
+        const ny = refcMessage.grid.ny;
+        const lat1 = refcMessage.grid.la1;
+        const lon1 = refcMessage.grid.lo1;
 
-        // Adjust longitudes if needed (GRIB uses 0-360 sometimes)
-        const west = lon1 > 180 ? lon1 - 360 : lon1;
-        const east = lon2 > 180 ? lon2 - 360 : lon2;
-        const north = Math.max(lat1, lat2);
-        const south = Math.min(lat1, lat2);
+        // For Lambert Conformal, we need to calculate bounds
+        // For now, use approximate Alaska bounds
+        const west = -180.0;
+        const east = -110.0;
+        const north = 72.5;
+        const south = 40.0;
 
         console.log('Grid bounds:', { north, south, east, west });
         console.log('Grid dimensions:', { nx, ny });
+
+        // Get grid data
+        updateStatus('Extracting reflectivity data...', true);
+        const gridData = refcMessage.getData();
+        console.log('Grid data points:', gridData.length);
+        console.log('Data range:', Math.min(...gridData), 'to', Math.max(...gridData));
 
         // Create canvas overlay
         updateStatus('Rendering data on map...', true);
