@@ -10,7 +10,10 @@ class MinimalGRIB2 {
     }
 
     parse() {
-        while (this.offset < this.data.byteLength - 4) {
+        const maxMessages = 200; // Safety limit
+        let messageCount = 0;
+
+        while (this.offset < this.data.byteLength - 4 && messageCount < maxMessages) {
             // Look for "GRIB" magic number (peek without advancing offset)
             const bytes = new Uint8Array(this.data.buffer, this.offset, 4);
             const magic = String.fromCharCode.apply(null, bytes);
@@ -21,15 +24,18 @@ class MinimalGRIB2 {
                     const message = this.parseMessage();
                     if (message) {
                         this.messages.push(message);
+                        messageCount++;
                     }
                 } catch (e) {
-                    console.warn('Failed to parse GRIB message:', e);
+                    console.warn('Failed to parse GRIB message at offset', this.offset - 4, ':', e);
                     // Try to find next GRIB message
                 }
             } else {
                 this.offset++;
             }
         }
+
+        console.log('Parsed', this.messages.length, 'GRIB messages');
     }
 
     parseMessage() {
@@ -63,6 +69,12 @@ class MinimalGRIB2 {
             const sectionLength = this.getUint32(this.offset);
             const sectionNumber = this.getUint8(this.offset + 4);
 
+            if (sectionLength < 5 || this.offset + sectionLength > messageEnd) {
+                console.warn('Invalid section length, skipping to next message');
+                this.offset = messageEnd;
+                return null;
+            }
+
             if (sectionNumber === 3) {
                 // Grid Definition Section
                 gridDef = this.parseGridDefinition(this.offset, sectionLength);
@@ -77,10 +89,16 @@ class MinimalGRIB2 {
                 dataSection = { offset: this.offset + 5, length: sectionLength - 5 };
             } else if (sectionNumber === 8) {
                 // End section
+                this.offset += sectionLength;
                 break;
             }
 
             this.offset += sectionLength;
+        }
+
+        // Make sure we're at the end of the message
+        if (this.offset < messageEnd) {
+            this.offset = messageEnd;
         }
 
         if (!gridDef || !productDef) {
@@ -193,23 +211,35 @@ class MinimalGRIB2 {
     }
 
     readBits(bitOffset, numBits) {
-        const byteOffset = Math.floor(bitOffset / 8);
-        const bitInByte = bitOffset % 8;
+        if (numBits === 0) return 0;
+        if (numBits > 32) {
+            console.error('Cannot read more than 32 bits at once');
+            return 0;
+        }
 
         let value = 0;
-        let bitsRead = 0;
+        let bitsRemaining = numBits;
+        let currentBitOffset = bitOffset;
 
-        while (bitsRead < numBits) {
-            const bitsAvailable = 8 - bitInByte - bitsRead;
-            const bitsToRead = Math.min(numBits - bitsRead, bitsAvailable);
-            const shift = bitsAvailable - bitsToRead;
-            const mask = ((1 << bitsToRead) - 1) << shift;
+        while (bitsRemaining > 0) {
+            const byteOffset = Math.floor(currentBitOffset / 8);
+            const bitInByte = currentBitOffset % 8;
+            const bitsAvailableInByte = 8 - bitInByte;
+            const bitsToRead = Math.min(bitsRemaining, bitsAvailableInByte);
 
-            const byte = this.getUint8(byteOffset + Math.floor(bitsRead / 8));
-            const bits = (byte & mask) >> shift;
+            if (byteOffset >= this.data.byteLength) {
+                console.error('Bit offset exceeds data length');
+                return value;
+            }
+
+            const byte = this.getUint8(byteOffset);
+            const shift = bitsAvailableInByte - bitsToRead;
+            const mask = ((1 << bitsToRead) - 1);
+            const bits = (byte >> shift) & mask;
 
             value = (value << bitsToRead) | bits;
-            bitsRead += bitsToRead;
+            bitsRemaining -= bitsToRead;
+            currentBitOffset += bitsToRead;
         }
 
         return value;
