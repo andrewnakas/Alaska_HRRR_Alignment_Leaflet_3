@@ -194,6 +194,40 @@ class MinimalGRIB2 {
             repr.decimalScaleFactor = decimalScaleFactor;
             repr.bitsPerValue = bitsPerValue;
         }
+        // Complex packing (template 3)
+        else if (dataTemplate === 3) {
+            const referenceValue = this.getFloat32(offset + 11);
+            const binaryScaleFactor = this.getInt16(offset + 15);
+            const decimalScaleFactor = this.getInt16(offset + 17);
+            const bitsPerValue = this.getUint8(offset + 19);
+            const groupSplittingMethod = this.getUint8(offset + 20);
+            const missingValueManagement = this.getUint8(offset + 21);
+            const primaryMissingValue = this.getUint32(offset + 22);
+            const secondaryMissingValue = this.getUint32(offset + 26);
+            const numberOfGroups = this.getUint32(offset + 30);
+            const referenceForGroupWidths = this.getUint8(offset + 34);
+            const bitsForGroupWidths = this.getUint8(offset + 35);
+            const referenceForGroupLengths = this.getUint32(offset + 36);
+            const lengthIncrementForGroupLengths = this.getUint8(offset + 40);
+            const trueLengthOfLastGroup = this.getUint32(offset + 41);
+            const bitsForScaledGroupLengths = this.getUint8(offset + 45);
+
+            repr.referenceValue = referenceValue;
+            repr.binaryScaleFactor = binaryScaleFactor;
+            repr.decimalScaleFactor = decimalScaleFactor;
+            repr.bitsPerValue = bitsPerValue;
+            repr.groupSplittingMethod = groupSplittingMethod;
+            repr.missingValueManagement = missingValueManagement;
+            repr.primaryMissingValue = primaryMissingValue;
+            repr.secondaryMissingValue = secondaryMissingValue;
+            repr.numberOfGroups = numberOfGroups;
+            repr.referenceForGroupWidths = referenceForGroupWidths;
+            repr.bitsForGroupWidths = bitsForGroupWidths;
+            repr.referenceForGroupLengths = referenceForGroupLengths;
+            repr.lengthIncrementForGroupLengths = lengthIncrementForGroupLengths;
+            repr.trueLengthOfLastGroup = trueLengthOfLastGroup;
+            repr.bitsForScaledGroupLengths = bitsForScaledGroupLengths;
+        }
 
         return repr;
     }
@@ -222,7 +256,69 @@ class MinimalGRIB2 {
             return data;
         }
 
-        // For other templates, return zeros for now
+        // Complex packing (template 3)
+        if (dataDef.template === 3) {
+            console.log('Extracting complex packing data...');
+            const data = new Float32Array(gridDef.numPoints);
+
+            const ref = dataDef.referenceValue;
+            const binScale = Math.pow(2, dataDef.binaryScaleFactor);
+            const decScale = Math.pow(10, -dataDef.decimalScaleFactor);
+
+            let bitOffset = dataSection.offset * 8;
+
+            // Read group reference values
+            const groupRefs = new Float32Array(dataDef.numberOfGroups);
+            for (let i = 0; i < dataDef.numberOfGroups; i++) {
+                const packedRef = this.readBits(bitOffset, dataDef.bitsPerValue);
+                groupRefs[i] = ref + packedRef * binScale;
+                bitOffset += dataDef.bitsPerValue;
+            }
+
+            // Read group widths
+            const groupWidths = new Uint8Array(dataDef.numberOfGroups);
+            for (let i = 0; i < dataDef.numberOfGroups; i++) {
+                groupWidths[i] = this.readBits(bitOffset, dataDef.bitsForGroupWidths) + dataDef.referenceForGroupWidths;
+                bitOffset += dataDef.bitsForGroupWidths;
+            }
+
+            // Read group lengths
+            const groupLengths = new Uint32Array(dataDef.numberOfGroups);
+            for (let i = 0; i < dataDef.numberOfGroups; i++) {
+                const scaledLength = this.readBits(bitOffset, dataDef.bitsForScaledGroupLengths);
+                groupLengths[i] = dataDef.referenceForGroupLengths + scaledLength * dataDef.lengthIncrementForGroupLengths;
+                bitOffset += dataDef.bitsForScaledGroupLengths;
+            }
+
+            // Override last group length
+            if (dataDef.numberOfGroups > 0) {
+                groupLengths[dataDef.numberOfGroups - 1] = dataDef.trueLengthOfLastGroup;
+            }
+
+            // Unpack data values by group
+            let dataIndex = 0;
+            for (let g = 0; g < dataDef.numberOfGroups; g++) {
+                const groupRef = groupRefs[g];
+                const groupWidth = groupWidths[g];
+                const groupLength = groupLengths[g];
+
+                for (let i = 0; i < groupLength && dataIndex < gridDef.numPoints; i++) {
+                    if (groupWidth === 0) {
+                        data[dataIndex] = groupRef * decScale;
+                    } else {
+                        const packedValue = this.readBits(bitOffset, groupWidth);
+                        data[dataIndex] = (groupRef + packedValue) * decScale;
+                        bitOffset += groupWidth;
+                    }
+                    dataIndex++;
+                }
+            }
+
+            console.log('Complex packing extracted', dataIndex, 'values');
+            return data;
+        }
+
+        // For other templates, return zeros
         return new Float32Array(gridDef.numPoints);
     }
 
