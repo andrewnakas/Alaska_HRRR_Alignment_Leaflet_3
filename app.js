@@ -264,7 +264,15 @@ async function loadHRRRData() {
         updateStatus('Extracting reflectivity data...', true);
         const gridData = refcMessage.getData();
         console.log('Grid data points:', gridData.length);
-        console.log('Data range:', Math.min(...gridData), 'to', Math.max(...gridData));
+
+        // Calculate data range without spreading (too large for call stack)
+        let minVal = Infinity;
+        let maxVal = -Infinity;
+        for (let i = 0; i < gridData.length; i++) {
+            if (gridData[i] < minVal) minVal = gridData[i];
+            if (gridData[i] > maxVal) maxVal = gridData[i];
+        }
+        console.log('Data range:', minVal, 'to', maxVal);
 
         // Create canvas overlay
         updateStatus('Rendering data on map...', true);

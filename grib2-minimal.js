@@ -125,8 +125,24 @@ class MinimalGRIB2 {
             template: gridTemplateNum
         };
 
+        // Parse Polar Stereographic projection (template 20)
+        if (gridTemplateNum === 20) {
+            const nx = this.getUint32(offset + 30);
+            const ny = this.getUint32(offset + 34);
+            const la1 = this.getInt32(offset + 38) / 1000000;
+            const lo1 = this.getInt32(offset + 42) / 1000000;
+            const lad = this.getInt32(offset + 51) / 1000000;
+            const lov = this.getInt32(offset + 55) / 1000000;
+
+            grid.nx = nx;
+            grid.ny = ny;
+            grid.la1 = la1;
+            grid.lo1 = lo1;
+            grid.lad = lad;
+            grid.lov = lov;
+        }
         // Parse Lambert Conformal projection (template 30)
-        if (gridTemplateNum === 30) {
+        else if (gridTemplateNum === 30) {
             const nx = this.getUint32(offset + 30);
             const ny = this.getUint32(offset + 34);
             const la1 = this.getInt32(offset + 38) / 1000000;
